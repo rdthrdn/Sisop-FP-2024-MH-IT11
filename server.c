@@ -13,12 +13,12 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
-// #include <bcrypt.h>
+#include <crypt.h>
 
 #define PORT 8080
 #define MAX_CLIENTS 10
 #define MAX_BUFFER_SIZE 10240
-#define SALT_SIZE 64
+#define SALT_SIZE 16
 #define USERS_FILE "/home/kali/arsipsisop/fp/DiscorIT/users.csv"
 #define CHANNELS_FILE "/home/kali/arsipsisop/fp/DiscorIT/channels.csv"
 #define MAX_CHANNELS 10
@@ -48,7 +48,6 @@ typedef struct {
 
 RoomInfo rooms[MAX_ROOMS];
 int room_count = 0;
-
 
 // Fungsi untuk mendapatkan waktu saat ini
 void get_current_time(char *buffer) {
@@ -133,7 +132,7 @@ bool is_user_registered(const char *username) {
     char line[BUFFER_SIZE];
     while (fgets(line, sizeof(line), fp) != NULL) {
         char *user = strtok(line, ",");
-        if (token && strcmp(token, username) == 0) {
+        if (user && strcmp(user, username) == 0) {
             fclose(fp);
             return true;
         }
@@ -149,7 +148,6 @@ void register_user(const char *username, const char *password, client_info *clie
         send(client->socket, "Error: Username atau password tidak boleh kosong\n", 49, 0);
         return;
     }
-    create_directory("/home/kali/arsipsisop/fp/DiscorIT", client);
 
     FILE *file = fopen(USERS_FILE, "r+");
     if (!file) {
@@ -189,11 +187,11 @@ void register_user(const char *username, const char *password, client_info *clie
     fseek(file, 0, SEEK_END);
 
     char salt[SALT_SIZE];
-    snprintf(salt, sizeof(salt), "$2y$12$%.22s", "inistringsaltuntukbcrypt"); // SALT dapat dimodifikasi
+    snprintf(salt, sizeof(salt), "$1$%.8s", "salt"); // SALT dapat dimodifikasi
 
-    char hash[BCRYPT_HASHSIZE];
-    if (bcrypt_hashpw(password, salt, hash) != 0) {
-        fprintf(stderr, "Error: bcrypt_hashpw failed.\n"); // Debug error
+    char *hash = crypt(password, salt);
+    if (!hash) {
+        perror("crypt");
         send(client->socket, "Error: Registration failed.\n", 27, 0);
         fclose(file);
         return;
@@ -206,8 +204,8 @@ void register_user(const char *username, const char *password, client_info *clie
 }
 
 // Fungsi untuk login pengguna
-void login_user(int client_socket, char *username, char *password, ClientInfo *client) {
-    FILE *fp = fopen("DiscorIT/users.csv", "r");
+void login_user(int client_socket, char *username, char *password, client_info *client) {
+    FILE *fp = fopen(USERS_FILE, "r");
     if (fp == NULL) {
         perror("fopen");
         send(client_socket, "Login failed. Server error.\n", 28, 0);
@@ -218,10 +216,11 @@ void login_user(int client_socket, char *username, char *password, ClientInfo *c
     bool found = false;
     while (fgets(line, MAX_BUFFER_SIZE, fp) != NULL) {
         char *user = strtok(line, ",");
-        char *pass = strtok(NULL, ",");
-        if (strcmp(user, username) == 0 && strcmp(pass, password) == 0) {
+        char *hash = strtok(NULL, ",");
+        if (user && hash && strcmp(user, username) == 0 && strcmp(crypt(password, hash), hash) == 0) {
             found = true;
-            strcpy(client->username, username);
+            strcpy(client->logged_in_user, username);
+            strcpy(client->logged_in_role, strtok(NULL, ","));
             break;
         }
     }
@@ -230,7 +229,6 @@ void login_user(int client_socket, char *username, char *password, ClientInfo *c
 
     if (found) {
         send(client_socket, "Login successful.\n", 18, 0);
-        // Tambahkan logika untuk memperbarui informasi client di sini
     } else {
         send(client_socket, "Invalid username or password.\n", 30, 0);
     }
@@ -246,14 +244,14 @@ void list_channels(int client_socket) {
 }
 
 // Fungsi untuk membuat channel
-void create_channel(int client_socket, char *channel_name, char *key, ClientInfo *client) {
+void create_channel(const char *username, char *channel_name, char *key, client_info *client) {
     if (channel_count >= MAX_CHANNELS) {
-        send(client_socket, "Maximum channels reached.\n", 25, 0);
+        send(client->socket, "Maximum channels reached.\n", 25, 0);
         return;
     }
 
     if (is_channel_exists(channel_name)) {
-        send(client_socket, "Channel already exists.\n", 23, 0);
+        send(client->socket, "Channel already exists.\n", 23, 0);
         return;
     }
 
@@ -266,7 +264,7 @@ void create_channel(int client_socket, char *channel_name, char *key, ClientInfo
     snprintf(channel_dir, MAX_BUFFER_SIZE, "DiscorIT/%s", channel_name);
     if (mkdir(channel_dir, 0755) == -1) {
         perror("mkdir");
-        send(client_socket, "Failed to create channel.\n", 25, 0);
+        send(client->socket, "Failed to create channel.\n", 25, 0);
         return;
     }
 
@@ -274,7 +272,7 @@ void create_channel(int client_socket, char *channel_name, char *key, ClientInfo
     snprintf(admin_dir, MAX_BUFFER_SIZE, "%s/admin", channel_dir);
     if (mkdir(admin_dir, 0755) == -1) {
         perror("mkdir");
-        send(client_socket, "Failed to create channel.\n", 25, 0);
+        send(client->socket, "Failed to create channel.\n", 25, 0);
         return;
     }
 
@@ -284,18 +282,18 @@ void create_channel(int client_socket, char *channel_name, char *key, ClientInfo
     FILE *fp = fopen(auth_file, "a");
     if (fp == NULL) {
         perror("fopen");
-        send(client_socket, "Failed to create channel.\n", 25, 0);
+        send(client->socket, "Failed to create channel.\n", 25, 0);
         return;
     }
 
     // Mendapatkan ID pengguna dari file users.csv
     int user_id = -1;
-    FILE *user_fp = fopen("DiscorIT/users.csv", "r");
+    FILE *user_fp = fopen(USERS_FILE, "r");
     if (user_fp != NULL) {
         char line[MAX_BUFFER_SIZE];
         while (fgets(line, MAX_BUFFER_SIZE, user_fp) != NULL) {
             char *name = strtok(line, ",");
-            if (strcmp(name, client->username) == 0) {
+            if (name && strcmp(name, client->logged_in_user) == 0) {
                 sscanf(line, "%d,", &user_id);
                 break;
             }
@@ -304,14 +302,14 @@ void create_channel(int client_socket, char *channel_name, char *key, ClientInfo
     }
 
     if (user_id != -1) {
-        fprintf(fp, "%d,%s,ADMIN\n", user_id, client->username);
+        fprintf(fp, "%d,%s,ADMIN\n", user_id, client->logged_in_user);
     } else {
-        fprintf(fp, "%s,ADMIN\n", client->username); // Jika ID tidak ditemukan, gunakan username saja
+        fprintf(fp, "%s,ADMIN\n", client->logged_in_user); // Jika ID tidak ditemukan, gunakan username saja
     }
     fclose(fp);
 
     // Tambahkan channel ke channels.csv
-    fp = fopen("DiscorIT/channels.csv", "a");
+    fp = fopen(CHANNELS_FILE, "a");
     if (fp == NULL) {
         perror("fopen");
     } else {
@@ -319,18 +317,18 @@ void create_channel(int client_socket, char *channel_name, char *key, ClientInfo
         fclose(fp);
     }
 
-    send(client_socket, "Channel created successfully.\n", 30, 0);
+    send(client->socket, "Channel created successfully.\n", 30, 0);
 
     char log_message[MAX_BUFFER_SIZE];
-    snprintf(log_message, MAX_BUFFER_SIZE, "%s created channel \"%s\"", client->username, channel_name);
+    snprintf(log_message, MAX_BUFFER_SIZE, "%s created channel \"%s\"", client->logged_in_user, channel_name);
     write_log(channel_name, log_message);
 }
 
 // Fungsi untuk bergabung ke channel
-void join_channel(int client_socket, char *channel_name, char *key, ClientInfo *client) {
+void join_channel(const char *username, char *channel_name, char *key, client_info *client) {
     // Cek apakah channel ada
     if (!is_channel_exists(channel_name)) {
-        send(client_socket, "Channel not found.\n", 18, 0);
+        send(client->socket, "Channel not found.\n", 18, 0);
         return;
     }
 
@@ -346,15 +344,15 @@ void join_channel(int client_socket, char *channel_name, char *key, ClientInfo *
     // Jika channel ditemukan, verifikasi key
     if (channelIndex != -1) {
         if (strcmp(channelKeys[channelIndex], key) == 0) {
-            strcpy(client->channel, channel_name);
-            strcpy(client->room, ""); // Reset room saat pindah channel
-            send(client_socket, "Joined channel successfully.\n", 29, 0);
+            strcpy(client->logged_in_channel, channel_name);
+            strcpy(client->logged_in_room, ""); // Reset room saat pindah channel
+            send(client->socket, "Joined channel successfully.\n", 29, 0);
 
             char log_message[MAX_BUFFER_SIZE];
-            snprintf(log_message, MAX_BUFFER_SIZE, "%s joined channel \"%s\"", client->username, channel_name);
+            snprintf(log_message, MAX_BUFFER_SIZE, "%s joined channel \"%s\"", client->logged_in_user, channel_name);
             write_log(channel_name, log_message);
         } else {
-            send(client_socket, "Incorrect channel key.\n", 22, 0);
+            send(client->socket, "Incorrect channel key.\n", 22, 0);
         }
     }
 }
@@ -418,31 +416,31 @@ void delete_channel(const char *channel) {
 }
 
 // Fungsi untuk membuat room
-void create_room(int client_socket, char *room_name, ClientInfo *client) {
+void create_room(const char *username, const char *channel, char *room_name, client_info *client) {
     if (room_count >= MAX_ROOMS) {
-        send(client_socket, "Maximum rooms reached.\n", 22, 0);
+        send(client->socket, "Maximum rooms reached.\n", 22, 0);
         return;
     }
-    if (strlen(client->channel) == 0) { // Tambahkan pengecekan apakah user sudah di channel
-        send(client_socket, "You are not in any channel.\n", 28, 0);
+    if (strlen(client->logged_in_channel) == 0) { // Tambahkan pengecekan apakah user sudah di channel
+        send(client->socket, "You are not in any channel.\n", 28, 0);
         return;
     }
 
-    if (is_room_exists(room_name, client->channel)) {
-        send(client_socket, "Room already exists.\n", 20, 0);
+    if (is_room_exists(room_name, client->logged_in_channel)) {
+        send(client->socket, "Room already exists.\n", 20, 0);
         return;
     }
 
     strcpy(rooms[room_count].roomName, room_name);
-    strcpy(rooms[room_count].channelName, client->channel);
+    strcpy(rooms[room_count].channelName, client->logged_in_channel);
     room_count++;
 
     // Buat file chat.csv di dalam direktori room
     char room_dir[MAX_BUFFER_SIZE];
-    snprintf(room_dir, MAX_BUFFER_SIZE, "DiscorIT/%s/%s", client->channel, room_name);
+    snprintf(room_dir, MAX_BUFFER_SIZE, "DiscorIT/%s/%s", client->logged_in_channel, room_name);
     if (mkdir(room_dir, 0755) == -1) {
         perror("mkdir");
-        send(client_socket, "Failed to create room.\n", 22, 0);
+        send(client->socket, "Failed to create room.\n", 22, 0);
         return;
     }
 
@@ -451,34 +449,34 @@ void create_room(int client_socket, char *room_name, ClientInfo *client) {
     FILE *fp = fopen(chat_file, "w"); // Buat file kosong
     if (fp == NULL) {
         perror("fopen");
-        send(client_socket, "Failed to create room.\n", 22, 0);
+        send(client->socket, "Failed to create room.\n", 22, 0);
         return;
     }
     fclose(fp);
 
-    send(client_socket, "Room created successfully.\n", 27, 0);
+    send(client->socket, "Room created successfully.\n", 27, 0);
 
     char log_message[MAX_BUFFER_SIZE];
-    snprintf(log_message, MAX_BUFFER_SIZE, "%s created room \"%s\"", client->username, room_name);
-    write_log(client->channel, log_message);
+    snprintf(log_message, MAX_BUFFER_SIZE, "%s created room \"%s\"", client->logged_in_user, room_name);
+    write_log(client->logged_in_channel, log_message);
 }
 
 // Fungsi untuk bergabung ke room
-void join_room(int client_socket, char *room_name, ClientInfo *client) {
-    if (strlen(client->channel) == 0) {
-        send(client_socket, "You are not in any channel.\n", 28, 0);
+void join_room(const char *channel, char *room_name, client_info *client) {
+    if (strlen(client->logged_in_channel) == 0) {
+        send(client->socket, "You are not in any channel.\n", 28, 0);
         return;
     }
-    if (!is_room_exists(room_name, client->channel)) {
-        send(client_socket, "Room not found.\n", 15, 0);
+    if (!is_room_exists(room_name, client->logged_in_channel)) {
+        send(client->socket, "Room not found.\n", 15, 0);
         return;
     }
-    strcpy(client->room, room_name);
-    send(client_socket, "Joined room successfully.\n", 26, 0);
+    strcpy(client->logged_in_room, room_name);
+    send(client->socket, "Joined room successfully.\n", 26, 0);
 
     char log_message[MAX_BUFFER_SIZE];
-    snprintf(log_message, MAX_BUFFER_SIZE, "%s joined room \"%s\"", client->username, room_name);
-    write_log(client->channel, log_message);
+    snprintf(log_message, MAX_BUFFER_SIZE, "%s joined room \"%s\"", client->logged_in_user, room_name);
+    write_log(client->logged_in_channel, log_message);
 }
 
 void edit_room(const char *channel, const char *old_room, const char *new_room) {
@@ -500,21 +498,21 @@ void delete_room(const char *channel, const char *room) {
     }
 }
 
-void send_chat(int client_socket, char *message, ClientInfo *client) {
+void send_chat(const char *username, const char *channel, const char *room, char *message, client_info *client) {
     // Pastikan client berada di channel dan room
-    if (strlen(client->channel) == 0 || strlen(client->room) == 0) {
-        send(client_socket, "You are not in any channel or room.\n", 36, 0);
+    if (strlen(client->logged_in_channel) == 0 || strlen(client->logged_in_room) == 0) {
+        send(client->socket, "You are not in any channel or room.\n", 36, 0);
         return;
     }
 
     char chat_file[MAX_BUFFER_SIZE];
-    snprintf(chat_file, MAX_BUFFER_SIZE, "DiscorIT/%s/%s/chat.csv", client->channel, client->room);
+    snprintf(chat_file, MAX_BUFFER_SIZE, "DiscorIT/%s/%s/chat.csv", client->logged_in_channel, client->logged_in_room);
 
     // Buka file chat.csv dalam mode append
     FILE *fp = fopen(chat_file, "a");
     if (fp == NULL) {
         perror("fopen");
-        send(client_socket, "Failed to send chat.\n", 20, 0);
+        send(client->socket, "Failed to send chat.\n", 20, 0);
         return;
     }
 
@@ -526,7 +524,7 @@ void send_chat(int client_socket, char *message, ClientInfo *client) {
         while (fgetc(fp) != '\n') {
             fseek(fp, -2, SEEK_CUR);
         }
-        fscanf(fp, "%*d,%d", &next_chat_id);
+        fscanf(fp, "%*s,%d", &next_chat_id);
         next_chat_id++;
     }
 
@@ -535,12 +533,12 @@ void send_chat(int client_socket, char *message, ClientInfo *client) {
 
     // Format pesan chat sebelum dikirim ke client lain
     char formatted_message[MAX_BUFFER_SIZE];
-    snprintf(formatted_message, MAX_BUFFER_SIZE, "[%s][%d][%s] \"%s\"\n", timestamp, next_chat_id, client->username, message);
+    snprintf(formatted_message, MAX_BUFFER_SIZE, "[%s][%d][%s] \"%s\"\n", timestamp, next_chat_id, client->logged_in_user, message);
 
-    fprintf(fp, "%s,%d,%s,%s\n", timestamp, next_chat_id, client->username, message);
+    fprintf(fp, "%s,%d,%s,%s\n", timestamp, next_chat_id, client->logged_in_user, message);
     fclose(fp);
 
-    broadcast_message(formatted_message, client->channel, client->room);
+    broadcast_message(formatted_message, client->logged_in_channel, client->logged_in_room);
 }
 
 void edit_chat(const char *channel, const char *room, int chat_id, const char *new_text) {
@@ -752,7 +750,7 @@ void *handle_client(void *arg) {
             char *passwordFlag = strtok(NULL, " ");
             char *password = strtok(NULL, " ");
             if (username && passwordFlag && strcmp(passwordFlag, "-p") == 0 && password) {
-                login_user(username, password, cli);
+                login_user(cli->socket, username, password, cli);
             } else {
                 send(cli->socket, "Error: Invalid LOGIN format.\n", 28, 0);
             }
@@ -784,10 +782,10 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Invalid CREATE format or not in a channel.\n", 48, 0);
             }
         // ########## LIST ##########
-        } else if(strcmp(token, "LIST") == 0){
+        } else if(strcmp(command, "LIST") == 0){
             char *subcommand = strtok(NULL, " ");
             if (subcommand && strcmp(subcommand, "CHANNEL") == 0) {
-                list_channels(cli);
+                list_channels(cli->socket);
             } else if (subcommand && strcmp(subcommand, "ROOM") == 0) {
                 if (strlen(cli->logged_in_channel) == 0) {
                     send(cli->socket, "Error: You are not in any channel.\n", 35, 0);
@@ -804,7 +802,7 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Invalid LIST format.\n", 27, 0);
             }
         // ########## JOIN CHANNEL ##########
-        } else if (strcmp(token, "JOIN") == 0) {
+        } else if (strcmp(command, "JOIN") == 0) {
             if (strlen(cli->logged_in_user) == 0) { // Pastikan user sudah login
                 send(cli->socket, "Error: You must be logged in to join a channel.\n", 48, 0);
                 continue;
@@ -834,7 +832,7 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Invalid JOIN format.\n", 27, 0);
             }
         // ########## CHAT ##########
-        } else if (strcmp(token, "CHAT") == 0) {
+        } else if (strcmp(command, "CHAT") == 0) {
             if (strlen(cli->logged_in_channel) == 0 || strlen(cli->logged_in_room) == 0) {
                 send(cli->socket, "Error: You must be in a channel and room to chat.\n", 49, 0);
                 continue;
@@ -846,14 +844,15 @@ void *handle_client(void *arg) {
             }
             send_chat(cli->logged_in_user, cli->logged_in_channel, cli->logged_in_room, message, cli);
         // ########## SEE CHAT ##########
-        } else if (strcmp(token, "SEE") == 0) {
-            token = strtok(NULL, " ");
-            if (token == NULL || strcmp(token, "CHAT") != 0 || strlen(cli->logged_in_channel) == 0 || strlen(cli->logged_in_room) == 0) {
+        } else if (strcmp(command, "SEE") == 0) {
+            command = strtok(NULL, " ");
+            if (command == NULL || strcmp(command, "CHAT") != 0 || strlen(cli->logged_in_channel) == 0 || strlen(cli->logged_in_room) == 0) {
                 send(cli->socket, "Error: Invalid SEE CHAT format or you are not in a room.\n", 55, 0);
             } else {
                 see_chat(cli->logged_in_channel, cli->logged_in_room, cli);
             }
-} else if (strcmp(token, "EDIT") == 0) {
+        // ########## EDIT ##########
+        } else if (strcmp(command, "EDIT") == 0) {
             char *subcommand = strtok(NULL, " ");
             if (subcommand == NULL) {
                 send(cli->socket, "Error: Invalid EDIT format.\n", 27, 0);
@@ -869,7 +868,7 @@ void *handle_client(void *arg) {
                     continue;
                 }
                 int id_chat = atoi(id_str);
-                edit_chat(cli->logged_in_channel, cli->logged_in_room, id_chat, new_text, cli);
+                edit_chat(cli->logged_in_channel, cli->logged_in_room, id_chat, new_text);
 
             // ########## EDIT CHANNEL ##########
             } else if (strcmp(subcommand, "CHANNEL") == 0) {
@@ -884,7 +883,7 @@ void *handle_client(void *arg) {
                     send(cli->socket, "Error: You must exit the current channel/room first.\n", 51, 0);
                     continue;
                 } else {
-                    edit_channel(old_channel, new_channel, cli);
+                    edit_channel(old_channel, new_channel);
                 }
             // ########## EDIT ROOM ##########
             } else if (strcmp(subcommand, "ROOM") == 0) {
@@ -899,7 +898,7 @@ void *handle_client(void *arg) {
                     send(cli->socket, "Error: You must exit the current room first.\n", 45, 0);
                     continue;
                 } else {
-                    edit_room(cli->logged_in_channel, old_room, new_room, cli);
+                    edit_room(cli->logged_in_channel, old_room, new_room);
                 }
 
             // ########## EDIT PROFILE SELF ##########
@@ -928,7 +927,7 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Invalid EDIT format.\n", 27, 0);
             }
         // ########## DEL ##########
-        } else if (strcmp(token, "DEL") == 0){
+        } else if (strcmp(command, "DEL") == 0){
             char *subcommand = strtok(NULL, " ");
             if (subcommand == NULL) {
                 send(cli->socket, "Error: Format perintah DEL tidak valid.\n", 37, 0);
@@ -948,7 +947,7 @@ void *handle_client(void *arg) {
                     continue;
                 }
                 int chat_id = atoi(chat_id_str);
-                delete_chat(cli->logged_in_channel, cli->logged_in_room, chat_id, cli);
+                delete_chat(cli->logged_in_channel, cli->logged_in_room, chat_id);
 
             // ########## DEL CHANNEL ##########
             } else if (strcmp(subcommand, "CHANNEL") == 0) {
@@ -962,7 +961,7 @@ void *handle_client(void *arg) {
                     send(cli->socket, "Error: Penggunaan perintah: DEL CHANNEL <channel>\n", 47, 0);
                     continue;
                 }
-                delete_channel(channel, cli);
+                delete_channel(channel);
 
             // ########## DEL ROOM ##########
             } else if (strcmp(subcommand, "ROOM") == 0) {
@@ -976,24 +975,24 @@ void *handle_client(void *arg) {
                         send(cli->socket, "Error: Anda harus berada di dalam room untuk menghapusnya.\n", 56, 0);
                         continue;
                     } else {
-                        delete_room(cli->logged_in_channel, cli->logged_in_room, cli);
+                        delete_room(cli->logged_in_channel, cli->logged_in_room);
                     }
                 } else if (strcmp(room, "ALL") == 0) {
                     if (strlen(cli->logged_in_room) > 0) {
                         send(cli->socket, "Error: Anda harus keluar dari room terlebih dahulu.\n", 50, 0);
                         continue;
                     } else {
-                        delete_all_rooms(cli->logged_in_channel, cli);
+                        delete_all_rooms(cli->logged_in_channel);
                     }
                 } else {
-                    delete_room(cli->logged_in_channel, room, cli);
+                    delete_room(cli->logged_in_channel, room);
                 }
             } else {
                 send(cli->socket, "Error: Format perintah DEL tidak valid.\n", 37, 0);
             }
 
         // ########## BAN ##########
-        } else if (strcmp(token, "BAN") == 0) {
+        } else if (strcmp(command, "BAN") == 0) {
             if (strlen(cli->logged_in_channel) == 0) {
                 send(cli->socket, "Error: Anda belum bergabung dalam channel.\n", 42, 0);
                 continue;
@@ -1003,10 +1002,10 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Format perintah BAN tidak valid.\n", 38, 0);
                 continue;
             }
-            ban_user(cli->logged_in_channel, user_to_ban, cli);
+            ban_user(cli->logged_in_channel, user_to_ban);
 
         // ########## UNBAN ##########
-        } else if (strcmp(token, "UNBAN") == 0) {
+        } else if (strcmp(command, "UNBAN") == 0) {
             if (strlen(cli->logged_in_channel) == 0) {
                 send(cli->socket, "Error: Anda belum bergabung dalam channel.\n", 42, 0);
                 continue;
@@ -1016,10 +1015,10 @@ void *handle_client(void *arg) {
                 send(cli->socket, "Error: Format perintah UNBAN tidak valid.\n", 39, 0);
                 continue;
             }
-            unban_user(cli->logged_in_channel, user_to_unban, cli);
+            unban_user(cli->logged_in_channel, user_to_unban);
 
         // ########## REMOVE USER ##########
-        } else if (strcmp(token, "REMOVE") == 0) {
+        } else if (strcmp(command, "REMOVE") == 0) {
             char *subcommand = strtok(NULL, " ");
             if (subcommand == NULL) {
                 send(cli->socket, "Error: Format perintah REMOVE tidak valid.\n", 40, 0);
@@ -1035,14 +1034,14 @@ void *handle_client(void *arg) {
                     send(cli->socket, "Error: Penggunaan perintah: REMOVE USER <username>\n", 48, 0);
                     continue;
                 }
-                remove_user(cli->logged_in_channel, target_user, cli);
+                remove_user(cli->logged_in_channel, target_user);
             } else if (strcmp(cli->logged_in_role, "ROOT") == 0) { // Hanya ROOT yang bisa REMOVE tanpa USER
-                remove_user_root(subcommand, cli);
+                remove_user_root(subcommand);
             } else {
                 send(cli->socket, "Error: Anda tidak memiliki izin untuk menghapus user secara permanen.\n", 64, 0);
             }
         // ########## EXIT ##########
-        } else if (strcmp(token, "EXIT") == 0) {
+        } else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
         } else {
             send(cli->socket, "Error: Perintah tidak dikenali.\n", 32, 0);
@@ -1051,18 +1050,17 @@ void *handle_client(void *arg) {
 
     // Hapus client dari daftar client
     pthread_mutex_lock(&clients_mutex);
-    for (int i = 0; i < client_count; i++) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] == cli) {
             free(clients[i]); 
             clients[i] = NULL; 
-            memmove(&clients[i], &clients[i + 1], (client_count - i - 1) * sizeof(client_info *));
-            client_count--;
             break;
         }
     }
-    pthread_mutex_unlock(&client_mutex);
+    pthread_mutex_unlock(&clients_mutex);
 
-    close(client_socket);
+    close(cli->socket);
+    free(cli);
     pthread_exit(NULL);
 }
 
@@ -1075,7 +1073,7 @@ int main() {
     pthread_t thread_id[MAX_CLIENTS];
     
     // Inisialisasi channels.csv
-    FILE *channelFile = fopen("DiscorIT/channels.csv", "r");
+    FILE *channelFile = fopen(CHANNELS_FILE, "r");
     if (channelFile) {
         char line[MAX_BUFFER_SIZE];
         while (fgets(line, sizeof(line), channelFile) != NULL && channel_count < MAX_CHANNELS) {
@@ -1099,7 +1097,7 @@ int main() {
 
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY; 
-    address.sin_port = htons(SERVER_PORT);
+    address.sin_port = htons(PORT);
 
     // Bind socket ke alamat dan port
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
@@ -1113,7 +1111,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Server listening on port %d\n", SERVER_PORT);
+    printf("Server listening on port %d\n", PORT);
 
     while (1) { // Loop terus-menerus untuk menerima koneksi baru
         // Terima koneksi masuk
@@ -1123,27 +1121,34 @@ int main() {
         }
 
         // Cek apakah sudah mencapai batas maksimum client
-        pthread_mutex_lock(&client_mutex);
+        pthread_mutex_lock(&clients_mutex);
         if (client_count >= MAX_CLIENTS) {
             send(new_socket, "Server is full.\n", 15, 0);
             close(new_socket); 
-            pthread_mutex_unlock(&client_mutex);
+            pthread_mutex_unlock(&clients_mutex);
             continue;
         }
 
-        // Tambahkan client baru ke array clients
-        clients[client_count].socket = new_socket;
+        client_info *cli = (client_info *)malloc(sizeof(client_info));
+        cli->socket = new_socket;
+        cli->address = address;
+        strcpy(cli->logged_in_user, "");
+        strcpy(cli->logged_in_role, "");
+        strcpy(cli->logged_in_channel, "");
+        strcpy(cli->logged_in_room, "");
+
+        clients[client_count] = cli;
         client_count++;
-        pthread_mutex_unlock(&client_mutex);
+        pthread_mutex_unlock(&clients_mutex);
 
         // Buat thread baru untuk menangani client
-        if (pthread_create(&thread_id[client_count - 1], NULL, handle_client, (void*)&new_socket) != 0) {
+        if (pthread_create(&thread_id[client_count - 1], NULL, handle_client, (void*)cli) != 0) {
             perror("pthread_create");
             // Jika gagal membuat thread, tutup socket dan kurangi client_count
             close(new_socket);
-            pthread_mutex_lock(&client_mutex);
+            pthread_mutex_lock(&clients_mutex);
             client_count--;
-            pthread_mutex_unlock(&client_mutex);
+            pthread_mutex_unlock(&clients_mutex);
         }
     }
     
