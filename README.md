@@ -2069,4 +2069,35 @@ void process_user_input(int connection, const char *user_id) {
 
 ## Hasil Run
 Berikut kami lampirkan screenshot dari hasil run dari program kami yang telah kami coba
+![image_2024-06-28_20-25-53](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/749de363-6ba2-4326-85c9-b25f394c9343)
+![image_2024-06-28_20-25-53 (3)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/bb4683d9-587d-4516-8e1e-64bb519b5b7f)
+![image_2024-06-28_20-25-53 (4)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/2d83f95f-53c6-4d48-9aad-d2625f3b0f59)
+![image_2024-06-28_20-25-53 (5)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/b53d28bb-711c-4c9d-b33f-2c3e5be4f54f)
+![image_2024-06-28_20-25-53 (6)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/7d5ec2a3-6758-4648-87f1-1ebd8453d09a)
+![image_2024-06-28_20-25-53 (7)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/0212d2c9-4d96-40b1-932d-6c35511d0ce5)
+![image_2024-06-28_20-25-53 (8)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/0b8bbb05-1156-4107-a6ba-c6346ac693ae)
+![image_2024-06-28_20-25-53 (9)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/d03c3672-91e9-48f1-a2a9-e880fbcf18a5)
+![image_2024-06-28_20-25-53 (2)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/65c8c50f-90a8-4f14-bbf7-9e842e9ada1d)
+![image_2024-06-28_20-25-53 (10)](https://github.com/rdthrdn/Sisop-FP-2024-MH-IT11/assets/137570361/54f72337-5823-4033-984d-5f19337960e8)
+
+## Kesimpulan dan Kekurangan dari program kami
+Program kami masih memiliki beberapa kekurangan, diantaranya :
+1. Fungsionalitas monitor.c yang masih belum bekerja
+2. Banyak fungsi dari server.c yang seharusnya diminta tetapi belum sepenuhnya tereksekusi
+3. Banyaknya bug yang masih ada
+
+Fungsionalitas dari discorit.c dan server.c kami yang sudah bisa bekerja dengan baik diantaranya : 
+1. login
+2. register
+3. create channel
+4. create room
+5. join channel
+6. join room
+7. send chat
+8. list user
+9. list channel
+10. list room
+
+
+
 
